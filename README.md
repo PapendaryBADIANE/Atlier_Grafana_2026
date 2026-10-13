@@ -14,18 +14,20 @@ Superviser des conteneurs Docker avec **cAdvisor**, **Prometheus** et **Grafana*
 
 ```mermaid
 flowchart LR
+    G["Grafana :3000<br/>affiche les métriques"]
+    P["Prometheus :9090<br/>stocke les métriques"]
+    C["cAdvisor :8080<br/>collecte les métriques"]
     W1["web1 (httpd) :80"]
     W2["web2 (httpd) :81"]
     W3["web3 (httpd) :82"]
-    C["cAdvisor :8080<br/>collecte les métriques"]
-    P["Prometheus :9090<br/>stocke les métriques"]
-    G["Grafana :3000<br/>affiche les métriques"]
-    W1 --> C
-    W2 --> C
-    W3 --> C
-    C -- "scrape toutes les 15 s" --> P
-    P -- "requêtes PromQL" --> G
+    G -- "interroge (PromQL)" --> P
+    P -- "scrape toutes les 15 s" --> C
+    C -- "mesure" --> W1
+    C -- "mesure" --> W2
+    C -- "mesure" --> W3
 ```
+
+Chaque flèche part de celui qui **prend l'initiative** : Grafana interroge Prometheus, Prometheus vient lire cAdvisor, cAdvisor mesure les conteneurs. Les données, elles, remontent dans l'autre sens.
 
 | Brique | Rôle | Port |
 |---|---|---|
@@ -47,15 +49,6 @@ flowchart LR
 ```bash
 docker --version
 ```
-
-### Accéder à un port depuis le navigateur
-
-Dans un Codespace, `localhost` désigne la machine distante, pas votre poste. Pour ouvrir une interface web :
-
-1. Ouvrez l'onglet **PORTS** (à côté de **TERMINAL**).
-2. Repérez la ligne du port voulu et cliquez sur l'icône 🌐 (**Open in Browser**).
-
-Si un port n'apparaît pas dans la liste, cliquez sur **Forward a Port** (ou **Add Port**) et saisissez son numéro.
 
 ---
 
@@ -118,7 +111,7 @@ Pourquoi autant de volumes ? cAdvisor tourne lui-même dans un conteneur, donc i
 curl -s localhost:8080/metrics | grep 'container_memory_usage_bytes' | grep 'name="web'
 ```
 
-Vous devez obtenir trois lignes, une par serveur web. Ouvrez aussi le port **8080** dans le navigateur pour découvrir l'interface de cAdvisor.
+Vous devez obtenir trois lignes, une par serveur web. Cliquez sur l'onglet **[Ports]** dans votre Codespace (à droite de Terminal) puis cliquez sur l'URL 8080.
 
 **Question** : à quoi ressemble une métrique Prometheus ? Repérez dans une ligne le *nom* de la métrique, ses *labels* (entre accolades) et sa *valeur*.
 
@@ -130,7 +123,7 @@ Vous devez obtenir trois lignes, une par serveur web. Ouvrez aussi le port **808
 
 Prometheus a besoin qu'on lui dise **où** aller chercher les métriques et **à quelle fréquence**. C'est le rôle de son fichier de configuration.
 
-Créez un fichier `prometheus.yml` à la racine du dépôt :
+Créez un fichier : `nano prometheus.yml` qui sera déposé à la racine du dépôt
 
 ```yaml
 global:
@@ -268,13 +261,40 @@ Laissez tourner une à deux minutes, observez le tableau de bord (réglez le raf
 
 ## Pour aller plus loin
 
-- **Créer votre propre panneau** : dans un nouveau tableau de bord, ajoutez une visualisation avec la requête
+### Créer votre propre panneau
 
-  ```promql
-  sum by (name) (rate(container_cpu_usage_seconds_total{name=~"web.*"}[1m]))
-  ```
+À l'étape 6, vous avez importé un tableau de bord tout fait. Construisez maintenant vous-même un graphique qui affiche l'utilisation CPU des trois serveurs web.
 
-  Que fait `rate(...[1m])` ? Pourquoi ne pas afficher directement `container_cpu_usage_seconds_total` ?
+1. Menu de gauche → **Dashboards** → créez un nouveau tableau de bord (**New dashboard**).
+2. Dans la zone **Add**, cliquez sur **Panel** : un panneau vide est ajouté.
+3. Sur ce panneau, cliquez sur **Edit** pour ouvrir l'éditeur.
+4. Dans l'onglet **Queries**, vérifiez que **Data source** indique bien votre source Prometheus.
+5. Dans le champ de requête, saisissez :
+
+   ```promql
+   sum by (name) (rate(container_cpu_usage_seconds_total{name=~"web.*"}[1m]))
+   ```
+
+6. Cliquez sur **Run queries** et réglez la période, en haut à droite, sur **Last 15 minutes**. Trois courbes apparaissent : `web1`, `web2` et `web3`.
+7. À droite, dans **Panel options** → **Title**, donnez un titre au panneau, par exemple `CPU des serveurs web`.
+8. Cliquez sur **Back** pour revenir au tableau de bord, puis sur **Save** pour l'enregistrer.
+
+La requête se lit de l'intérieur vers l'extérieur :
+
+| Morceau | Signification |
+|---|---|
+| `container_cpu_usage_seconds_total` | Métrique de cAdvisor : le total de secondes de CPU consommées par un conteneur depuis son démarrage |
+| `{name=~"web.*"}` | Filtre : on ne garde que les conteneurs dont le nom commence par `web` |
+| `[1m]` | On regarde la dernière minute |
+| `rate(...)` | Vitesse d'augmentation par seconde sur cette minute |
+| `sum by (name) (...)` | On additionne pour obtenir une seule courbe par conteneur |
+
+Le résultat est l'utilisation CPU de chaque serveur web : une valeur de `0.5` signifie que le conteneur occupe la moitié d'un cœur. Relancez la boucle `curl` de l'étape 7 pour voir la courbe de `web1` se détacher des deux autres.
+
+**Question** : remplacez la requête par `container_cpu_usage_seconds_total{name=~"web.*"}`, sans `rate`. Quelle est la forme des courbes ? Pourquoi sont-elles inexploitables pour connaître la charge du moment ?
+
+### Autres pistes
+
 - **Ajouter un quatrième serveur** `web4` sur le port 83. Faut-il modifier `prometheus.yml` ? Pourquoi ?
 - **Créer une alerte** Grafana qui se déclenche quand un conteneur `web` dépasse un seuil de mémoire.
 - **Tout décrire dans un `docker-compose.yml`** pour démarrer la pile complète en une seule commande.
